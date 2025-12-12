@@ -40,7 +40,7 @@ async def user_login(user: UserLogin, db: AsyncSession = Depends(get_session)):
 
     if user_res is None or user.password != User.password:
         raise HTTPException(status_code=401, detail='Wrong password or login')
-    access_token = auth.create_access_token(uid=user_res.id)
+    access_token = auth.create_access_token(uid=str(user_res.id))
     return {
         'access_token': access_token,
         'token_type': 'bearer',
@@ -51,3 +51,30 @@ async def user_login(user: UserLogin, db: AsyncSession = Depends(get_session)):
 @app.get('/me', dependencies=[Depends(auth.access_token_required)])
 async def me():
     return {'message': 'Hello from protected route'}
+
+@app.post('/users/auth')
+async def auth_user(user:UserCreate, db: AsyncSession = Depends(get_session)):
+    result = await db.execute(select(User).where(User.username==user.username))
+    user_res = result.scalar_one_or_none()
+    if user_res:
+        raise HTTPException(status_code=401, detail='username is already taken')
+
+    new_user = User(
+        username=user.username,
+        password = user.password,
+        avatar_url=None
+    )
+
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+
+    access_token = auth.create_access_token(uid=str(new_user.id))
+
+    return {
+        'user_id': new_user.id,
+        'username': new_user.username,
+        'avatar_url': new_user.avatar_url,
+        'access_token': access_token,
+        'token_type': 'bearer'
+    }
