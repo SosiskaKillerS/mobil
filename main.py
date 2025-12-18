@@ -1,80 +1,68 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.params import Depends
+from starlette.middleware.cors import CORSMiddleware
+from authx import AuthX, AuthXConfig
+from schemas import UserLogin, UserRegistration
+from init_db import get_session, engine, Base
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from starlette.middleware.cors import CORSMiddleware
-from init_db import engine, Base, get_session
 from models import User
-from schemas import UserCreate, UserLogin
-from authx import AuthX, AuthXConfig
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS "],
     allow_headers=["*"],
 )
 
-config = AuthXConfig(
-    JWT_SECRET_KEY="SUPER_SECRET_KEY",
-    JWT_TOKEN_LOCATION=["headers"],
-    JWT_HEADER_NAME="Authorization",
-    JWT_HEADER_TYPE="Bearer",
-)
+config = AuthXConfig()
+config.JWT_SECRET_KEY = "SECRET_KEY"
+config.JWT_ACCESS_COOKIE_NAME = 'my_access_token'
+config.JWT_TOKEN_LOCATION = ["cookies"]
 
-auth = AuthX(config=config)
-auth.handle_errors(app)
-@app.post("/startup")
-async def on_startup():
+security = AuthX(config=config)
 
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.drop_all)
-        await connection.run_sync(Base.metadata.create_all)
-    return {'response': 'success'}
+@app.post('/startup')
+async def startup():
+    async with engine.begin() as connect:
+        await connect.run_sync(Base.metadata.drop_all)
+        await connect.run_sync(Base.metadata.create_all)
+    return {"message": "success"}
 
-@app.post('/users/login')
-async def user_login(user: UserLogin, db: AsyncSession = Depends(get_session)):
-    result = await db.execute(select(User).where(User.username == user.username))
-    user_res = result.scalar_one_or_none()
-
-    if user_res is None or user.password != User.password:
-        raise HTTPException(status_code=401, detail='Wrong password or login')
-    access_token = auth.create_access_token(uid=str(user_res.id))
-    return {
-        'access_token': access_token,
-        'token_type': 'bearer',
-        'user_id': user_res.id,
-        'username': user_res.username,
-        'avatar_url': user_res.avatar_url
-    }
-@app.get('/me', dependencies=[Depends(auth.access_token_required)])
-async def me():
-    return {'message': 'Hello from protected route'}
-
-@app.post('/users/auth')
-async def auth_user(user:UserCreate, db: AsyncSession = Depends(get_session)):
-    result = await db.execute(select(User).where(User.username==user.username))
-    user_res = result.scalar_one_or_none()
-    if user_res:
-        raise HTTPException(status_code=401, detail='username is already taken')
-
+@app.post('/registration', summary
+="Registration for user")
+async def reg(creds: UserRegistration, db: AsyncSession = Depends(get_session)):
     new_user = User(
-        username=user.username,
-        password = user.password,
-        avatar_url=None
+        username=creds.username,
+        email=getattr(creds, "email"),
+        password=creds.password
     )
-
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
+    return 'success'
 
-    access_token = auth.create_access_token(uid=str(new_user.id))
 
-    return {
-        'user_id': new_user.id,
-        'username': new_user.username,
-        'avatar_url': new_user.avatar_url,
-        'access_token': access_token,
-        'token_type': 'bearer'
-    }
+@app.post('/login', summary="User login endpoint")
+async def login(creds: UserLogin, db: AsyncSession = Depends(get_session)):
+    if creds.email is None:
+        result = await db.execute(select(User).where(User.username == creds.username))
+        is_username_exist = result.scalar_one_or_none()
+        if is_username_exist is None:
+            raise HTTPException(status_code=401, detail = 'username or password is wrong')
+        if creds.password != is_username_exist.password:
+            raise HTTPException(status_code=401, detail = 'username or password is wrong')
+        token = security.create_access_token(uid=str(is_username_exist.id))
+        return {"access_token": token}
+    else:
+        result = await db.execute(select(User).where(User.email == creds.email))
+        is_email_exist = result.scalar_one_or_none()
+        if is_email_exist is None:
+            return HTTPException(status_code=401, detail= 'email or password is wrong')
+        if creds.password != is_email_exist.password:
+            return HTTPException(status_code=401, detail='email or password is wrong')
+        token = security.create_access_token(uid=str(is_email_exist.id))
+        return {"access_token": token}
+
