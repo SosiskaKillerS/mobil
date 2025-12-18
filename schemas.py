@@ -1,9 +1,9 @@
-from pydantic import BaseModel, EmailStr, model_validator
+from pydantic import BaseModel, EmailStr, model_validator, Field
 
 class UserLogin(BaseModel):
-    password: str
-    email: EmailStr | None = None
-    username: str | None = None
+    password: str = Field(min_length=6, max_length=12)
+    email: EmailStr | None = Field(min_length=5)
+    username: str = Field(min_length=3, max_length=25)
 
     @model_validator(mode="after")
     def check_login(self):
@@ -12,8 +12,10 @@ class UserLogin(BaseModel):
         return self
 
 class UserRegistration(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
+    username: str = Field(min_length=3, max_length=25)
+    email: EmailStr = Field(min_length=5)
+    password: str = Field(min_length=6, max_length=12)
 
 
+class Verify(BaseModel):
+    code: str = Field(min_length=4, max_length=4)

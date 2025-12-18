@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, DateTime, func
+from sqlalchemy import ForeignKey, DateTime, func, Boolean, DateTime
 from init_db import Base
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
@@ -11,6 +11,11 @@ class User(Base):
     password: Mapped[str] = mapped_column(nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(nullable=True)
     email: Mapped[str] = mapped_column(nullable=True)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    verify_code: Mapped[str | None] = mapped_column(nullable=True)
+    verify_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reset_code: Mapped[str | None] = mapped_column(nullable=True)
+    reset_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     posts: Mapped[list['Post']] = relationship(back_populates='author', cascade='all, delete-orphan')
 
