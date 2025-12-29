@@ -1,41 +1,55 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.params import Depends
+import os
+import json
+import secrets
+from datetime import datetime
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from starlette.middleware.cors import CORSMiddleware
+
 from authx import AuthX, AuthXConfig
-from schemas import UserLogin, UserRegistration, Verify
-from init_db import get_session, engine, Base
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+
+from schemas import UserLogin, UserRegistration, Verify
+from init_db import get_session, engine, Base
 from models import User
+
 from email.message import EmailMessage
 import aiosmtplib
-import secrets
+
+from redis.asyncio import Redis
+
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS "],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
 config = AuthXConfig()
-config.JWT_SECRET_KEY = "SECRET_KEY"
-config.JWT_ACCESS_COOKIE_NAME = 'my_access_token'
+config.JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "SECRET_KEY")
+config.JWT_ACCESS_COOKIE_NAME = "my_access_token"
 config.JWT_TOKEN_LOCATION = ["cookies"]
-
 security = AuthX(config=config)
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USER = "kachelyass123@gmail.com"
 SMTP_PASSWORD = "fyffhcgizrxjpvmu"
-SMTP_FROM = "kachelyass123@gmail.com"
+SMTP_FROM = SMTP_USER
 SMTP_STARTTLS = True
-CODE_TTL_MINUTE = 10
 
-async def send_email(to_email: str, subject: str, body: str)->None:
+CODE_TTL_MINUTE = 10
+REG_TTL_SECONDS = CODE_TTL_MINUTE * 60
+
+REDIS_HOST = "localhost"
+REDIS_PORT = 6379
+
+
+async def send_email(to_email: str, subject: str, body: str) -> None:
     msg = EmailMessage()
     msg["From"] = SMTP_FROM
     msg["To"] = to_email
@@ -51,69 +65,170 @@ async def send_email(to_email: str, subject: str, body: str)->None:
         start_tls=True,
     )
 
-@app.post('/startup')
+
+def get_redis() -> Redis:
+    r = getattr(app.state, "redis", None)
+    if r is None:
+        raise HTTPException(status_code=500, detail="Redis is not initialized. Call /startup first.")
+    return r
+
+
+async def generate_unique_code(prefix: str) -> str:
+    r = get_redis()
+    for _ in range(30):
+        code = f"{secrets.randbelow(10_000):04d}"
+        if not await r.exists(f"{prefix}:code:{code}"):
+            return code
+    raise HTTPException(status_code=500, detail="Could not generate code, try again")
+
+
+@app.post("/startup")
 async def startup():
     async with engine.begin() as connect:
         await connect.run_sync(Base.metadata.drop_all)
         await connect.run_sync(Base.metadata.create_all)
+
+    app.state.redis = Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+    try:
+        await app.state.redis.ping()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Redis connection failed")
+
     return {"message": "success"}
 
-@app.post('/registration', summary
-="Registration for user")
-async def reg(creds: UserRegistration, bg: BackgroundTasks, db: AsyncSession = Depends(get_session)):
-    result_email = await db.execute(select(User).where(creds.email == User.email))
-    is_email_engaged = result_email.scalar_one_or_none()
-    if is_email_engaged is not None:
-        raise HTTPException(status_code=400, detail='Email is already taken')
 
-    result_username = await db.execute(select(User).where(creds.username == User.username))
-    is_username_engaged = result_username.scalar_one_or_none()
-    if is_username_engaged is not None:
+@app.post("/shutdown")
+async def shutdown():
+    r = getattr(app.state, "redis", None)
+    if r is not None:
+        await r.aclose()
+    return {"message": "redis closed"}
+
+
+@app.post("/registration")
+async def reg(creds: UserRegistration, bg: BackgroundTasks, db: AsyncSession = Depends(get_session)):
+    r = get_redis()
+
+    result_email = await db.execute(select(User).where(User.email == creds.email))
+    if result_email.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=400, detail="Email is already taken")
+
+    result_username = await db.execute(select(User).where(User.username == creds.username))
+    if result_username.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Username is already taken")
 
-    code = f"{secrets.randbelow(10_000):04d}"
+    email_lower = creds.email.lower()
+    username_lower = creds.username.lower()
 
-    new_user = User(
-        username=creds.username,
-        email=getattr(creds, "email"),
-        password=creds.password
-    )
-    db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
+    email_key = f"reg:email:{email_lower}"
+    username_key = f"reg:username:{username_lower}"
+
+    if await r.exists(email_key) or await r.exists(username_key):
+        raise HTTPException(status_code=400, detail="Verification already requested. Check your email.")
+
+    code = await generate_unique_code("reg")
+
+    payload = {
+        "username": creds.username,
+        "email": creds.email,
+        "password": creds.password,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+    await r.set(email_key, json.dumps(payload), ex=REG_TTL_SECONDS)
+    await r.set(username_key, email_lower, ex=REG_TTL_SECONDS)
+    await r.set(f"reg:code:{code}", email_lower, ex=REG_TTL_SECONDS)
 
     bg.add_task(
         send_email,
-        new_user.email,
+        creds.email,
         "Email verification code",
         f"Your code: {code}",
     )
+
     return {"message": "verification code sent"}
 
-@app.post('/verify-email')
-async def verify_email(data: Verify, db: AsyncSession = Depends(get_session)):
-    ...
 
-@app.post('/login', summary="User login endpoint")
-async def login(creds: UserLogin, db: AsyncSession = Depends(get_session)):
+@app.post("/verify-email")
+async def verify_email(data: Verify, db: AsyncSession = Depends(get_session)):
+    r = get_redis()
+
+    code_key = f"reg:code:{data.code}"
+    email_lower = await r.get(code_key)
+    if not email_lower:
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+
+    email_key = f"reg:email:{email_lower}"
+    raw = await r.get(email_key)
+    if not raw:
+        await r.delete(code_key)
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+
+    payload = json.loads(raw)
+
+    check_email = await db.execute(select(User).where(User.email == payload["email"]))
+    if check_email.scalar_one_or_none() is not None:
+        await r.delete(code_key, email_key, f"reg:username:{payload['username'].lower()}")
+        raise HTTPException(status_code=400, detail="Email is already taken")
+
+    check_username = await db.execute(select(User).where(User.username == payload["username"]))
+    if check_username.scalar_one_or_none() is not None:
+        await r.delete(code_key, email_key, f"reg:username:{payload['username'].lower()}")
+        raise HTTPException(status_code=400, detail="Username is already taken")
+
+    new_user = User(
+        username=payload["username"],
+        email=payload["email"],
+        password=payload["password"],
+        is_verified=True,
+    )
+    db.add(new_user)
+    await db.commit()
+
+    await r.delete(code_key, email_key, f"reg:username:{payload['username'].lower()}")
+
+    return {"message": "email verified, user created"}
+
+
+@app.post("/login")
+async def login(creds: UserLogin, bg: BackgroundTasks, db: AsyncSession = Depends(get_session)):
+    r = get_redis()
+
     if creds.email is None:
         result = await db.execute(select(User).where(User.username == creds.username))
-        is_username_exist = result.scalar_one_or_none()
-        if is_username_exist is None:
-            raise HTTPException(status_code=401, detail = 'username or password is wrong')
-        if creds.password != is_username_exist.password:
-            raise HTTPException(status_code=401, detail = 'username or password is wrong')
-        token = security.create_access_token(uid=str(is_username_exist.id))
-        return {"access_token": token}
     else:
         result = await db.execute(select(User).where(User.email == creds.email))
-        is_email_exist = result.scalar_one_or_none()
-        if is_email_exist is None:
-            return HTTPException(status_code=401, detail= 'email or password is wrong')
-        if creds.password != is_email_exist.password:
-            return HTTPException(status_code=401, detail='email or password is wrong')
-        token = security.create_access_token(uid=str(is_email_exist.id))
-        return {"access_token": token}
+
+    user = result.scalar_one_or_none()
+    if user is None or creds.password != user.password:
+        raise HTTPException(status_code=401, detail="email/username or password is wrong")
+
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="Email is not verified")
+
+    code = await generate_unique_code("login")
+
+    await r.set(f"login:code:{code}", str(user.id), ex=REG_TTL_SECONDS)
+
+    bg.add_task(
+        send_email,
+        user.email,
+        "Login code",
+        f"Your login code: {code}",
+    )
+
+    return {"message": "login code sent"}
 
 
+@app.post("/login-verify")
+async def login_verify(data: Verify):
+    r = get_redis()
 
+    uid = await r.get(f"login:code:{data.code}")
+    if not uid:
+        raise HTTPException(status_code=401, detail="Invalid or expired code")
+
+    await r.delete(f"login:code:{data.code}")
+
+    token = security.create_access_token(uid=str(uid))
+    return {"access_token": token}
