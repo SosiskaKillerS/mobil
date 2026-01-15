@@ -312,7 +312,11 @@ async def get_user(user_id: int, db: AsyncSession = Depends(get_session)):
     }
 
 @app.post("/users/{user_id}/avatar")
-async def upload_avatar(user_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_session)):
+async def upload_avatar(
+    user_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_session),
+):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Only images allowed")
 
@@ -335,7 +339,10 @@ async def upload_avatar(user_id: int, file: UploadFile = File(...), db: AsyncSes
     dest_path.write_bytes(content)
 
     user.avatar_url = f"/media/avatars/{filename}"
+    avatar_url = user.avatar_url  # <-- фикс: сохраняем до commit
+
     await db.commit()
 
-    return {"avatar_url": user.avatar_url}
+    return {"avatar_url": avatar_url}
+
 
