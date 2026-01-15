@@ -81,10 +81,12 @@ def get_redis() -> Redis:
     return r
 
 
+
 async def generate_unique_code(prefix: str) -> str:
     r = get_redis()
     for _ in range(30):
         code = f"{secrets.randbelow(10_000):04d}"
+        print(code)
         if not await r.exists(f"{prefix}:code:{code}"):
             return code
     raise HTTPException(status_code=500, detail="Could not generate code, try again")
