@@ -1,7 +1,8 @@
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+import os
 
-DATABASE_URL = 'sqlite+aiosqlite:///mobil.db'
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///mobil.db")
 
 engine = create_async_engine(DATABASE_URL, echo=True)
 
