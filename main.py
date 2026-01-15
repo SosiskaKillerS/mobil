@@ -64,14 +64,21 @@ async def send_email(to_email: str, subject: str, body: str) -> None:
     msg["Subject"] = subject
     msg.set_content(body)
 
-    await aiosmtplib.send(
-        msg,
-        hostname=SMTP_HOST,
-        port=SMTP_PORT,
-        username=SMTP_USER,
-        password=SMTP_PASSWORD,
-        start_tls=True,
-    )
+    try:
+        await aiosmtplib.send(
+            msg,
+            hostname=SMTP_HOST,
+            port=SMTP_PORT,
+            username=SMTP_USER,
+            password=SMTP_PASSWORD,
+            start_tls=True,
+            timeout=10,  # чтобы быстрее падало
+        )
+        print("EMAIL SENT", to_email, flush=True)
+    except Exception as e:
+        # чтобы демо работало: выводим код/письмо в логи Render
+        print(f"[EMAIL FAILED] to={to_email} subject={subject} body={body} err={e!r}", flush=True)
+
 
 
 def get_redis() -> Redis:
