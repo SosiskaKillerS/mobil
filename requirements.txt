@@ -1,6 +1,9 @@
 fastapi
 uvicorn[standard]
+pydantic
+pydantic[email]
 sqlalchemy
+sqlalchemy[asyncio]
 asyncpg
 redis
 aiosmtplib
