@@ -452,7 +452,7 @@ async def upload_post_media(file: UploadFile = File(...)):
         "media_type": "video" if ct.startswith("video/") else "image",
     }
 
-@app.get("/posts/feed", response_model=list[PostOut])
+@app.get("/posts/feed", response_model=list[FeedPostOut])
 async def get_feed_posts(
     limit: int = 30,
     offset: int = 0,
@@ -467,8 +467,21 @@ async def get_feed_posts(
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
 
+    purchase_exists = (
+        select(PostPurchase.id)
+        .where(PostPurchase.user_id == me)
+        .where(PostPurchase.post_id == Post.id)
+        .exists()
+    )
+
     result = await db.execute(
-        select(Post)
+        select(
+            Post,
+            User.username,
+            User.avatar_url,
+            purchase_exists,
+        )
+        .join(User, User.id == Post.author_id)
         .where(Post.is_published == True)
         .where(Post.is_public == True)
         .where(Post.author_id != me)
@@ -476,7 +489,37 @@ async def get_feed_posts(
         .limit(limit)
         .offset(offset)
     )
-    return list(result.scalars().all())
+
+    rows = result.all()
+    out: list[dict] = []
+
+    for post, username, avatar_url, purchased in rows:
+        has_access = (post.author_id == me) or (not post.is_paid) or bool(purchased)
+
+        out.append(
+            {
+                "id": post.id,
+                "author_id": post.author_id,
+                "title": post.title,
+                "caption": post.caption,
+                "media_url": post.media_url,
+                "media_type": post.media_type,
+                "preview_url": post.preview_url,
+                "is_paid": post.is_paid,
+                "price_cents": post.price_cents,
+                "currency": post.currency,
+                "is_public": post.is_public,
+                "is_published": post.is_published,
+                "created_at": post.created_at,
+                "updated_at": post.updated_at,
+                "author_username": username,
+                "author_avatar_url": avatar_url,
+                "has_access": has_access,
+            }
+        )
+
+    return out
+
 
 @app.get("/posts/feed", response_model=list[FeedPostOut])
 async def get_feed_posts(
@@ -578,4 +621,3 @@ async def purchase_post(
     db.add(PostPurchase(user_id=me, post_id=post_id))
     await db.commit()
     return {"message": "purchased"}
-
