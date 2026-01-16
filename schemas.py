@@ -34,3 +34,17 @@ class RestorePassword(BaseModel):
 class RestorePasswordPatch(Verify):
     new_password: str = Field(min_length=6, max_length=12)
 
+class PostCreate(BaseModel):
+    title: str | None = None
+    media_url: str
+
+
+class PostOut(BaseModel):
+    id: int
+    author_id: int
+    title: str | None
+    media_url: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

@@ -8,13 +8,13 @@ import uuid
 from pathlib import Path
 from starlette.middleware.cors import CORSMiddleware
 
-from authx import AuthX, AuthXConfig
+from authx import AuthX, AuthXConfig, TokenPayload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from schemas import UserLogin, UserRegistration, Verify, RestorePassword, RestorePasswordPatch
+from schemas import UserLogin, UserRegistration, Verify, RestorePassword, RestorePasswordPatch, PostOut, PostCreate
 from init_db import get_session, engine, Base
-from models import User
+from models import User, Post
 
 from email.message import EmailMessage
 import aiosmtplib
@@ -344,5 +344,35 @@ async def upload_avatar(
     await db.commit()
 
     return {"avatar_url": avatar_url}
+
+
+@app.post("/posts", response_model=PostOut, status_code=201)
+async def create_post(
+    body: PostCreate,
+    db: AsyncSession = Depends(get_session),
+    token: TokenPayload = Depends(security.token_required(locations=["headers", "cookies"])),
+):
+    try:
+        author_id = int(token.sub)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token subject")
+
+    result = await db.execute(select(User).where(User.id == author_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    post = Post(
+        author_id=author_id,
+        title=body.title,
+        media_url=body.media_url,
+    )
+
+    db.add(post)
+    await db.commit()
+    await db.refresh(post)
+    return post
+
+
 
 
