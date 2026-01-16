@@ -12,9 +12,9 @@ from authx import AuthX, AuthXConfig, TokenPayload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from schemas import UserLogin, UserRegistration, Verify, RestorePassword, RestorePasswordPatch, PostOut, PostCreate
+from schemas import UserLogin, UserRegistration, Verify, RestorePassword, RestorePasswordPatch, PostOut, PostCreate, FeedPostOut
 from init_db import get_session, engine, Base
-from models import User, Post
+from models import User, Post, PostPurchase
 
 from email.message import EmailMessage
 import aiosmtplib
@@ -35,7 +35,7 @@ app.add_middleware(
 config = AuthXConfig()
 config.JWT_SECRET_KEY = "my_secret_key"
 config.JWT_ACCESS_COOKIE_NAME = "my_access_token"
-config.JWT_TOKEN_LOCATION = ["cookies"]
+config.JWT_TOKEN_LOCATION = ["headers", "cookies"]
 security = AuthX(config=config)
 
 SMTP_HOST = "smtp.gmail.com"
@@ -477,3 +477,105 @@ async def get_feed_posts(
         .offset(offset)
     )
     return list(result.scalars().all())
+
+@app.get("/posts/feed", response_model=list[FeedPostOut])
+async def get_feed_posts(
+    limit: int = 30,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_session),
+    token: TokenPayload = Depends(security.token_required(locations=["headers", "cookies"])),
+):
+    try:
+        me = int(token.sub)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
+    purchase_exists = (
+        select(PostPurchase.id)
+        .where(PostPurchase.user_id == me)
+        .where(PostPurchase.post_id == Post.id)
+        .exists()
+    )
+
+    result = await db.execute(
+        select(
+            Post,
+            User.username,
+            User.avatar_url,
+            purchase_exists,
+        )
+        .join(User, User.id == Post.author_id)
+        .where(Post.is_published == True)
+        .where(Post.is_public == True)
+        .where(Post.author_id != me)
+        .order_by(Post.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+
+    rows = result.all()
+    out: list[dict] = []
+
+    for post, username, avatar_url, purchased in rows:
+        has_access = True if (not post.is_paid) else bool(purchased)
+        out.append(
+            {
+                "id": post.id,
+                "author_id": post.author_id,
+                "title": post.title,
+                "caption": post.caption,
+                "media_url": post.media_url,
+                "media_type": post.media_type,
+                "preview_url": post.preview_url,
+                "is_paid": post.is_paid,
+                "price_cents": post.price_cents,
+                "currency": post.currency,
+                "is_public": post.is_public,
+                "is_published": post.is_published,
+                "created_at": post.created_at,
+                "updated_at": post.updated_at,
+                "author_username": username,
+                "author_avatar_url": avatar_url,
+                "has_access": has_access,
+            }
+        )
+
+    return out
+
+
+@app.post("/posts/{post_id}/purchase")
+async def purchase_post(
+    post_id: int,
+    db: AsyncSession = Depends(get_session),
+    token: TokenPayload = Depends(security.token_required(locations=["headers", "cookies"])),
+):
+    try:
+        me = int(token.sub)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
+    if post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    if post.author_id == me:
+        return {"message": "author_has_access"}
+
+    if not post.is_paid:
+        return {"message": "post_is_free"}
+
+    exists_res = await db.execute(
+        select(PostPurchase).where(PostPurchase.user_id == me, PostPurchase.post_id == post_id)
+    )
+    already = exists_res.scalar_one_or_none()
+    if already is not None:
+        return {"message": "already_purchased"}
+
+    db.add(PostPurchase(user_id=me, post_id=post_id))
+    await db.commit()
+    return {"message": "purchased"}
+

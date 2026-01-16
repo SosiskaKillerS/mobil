@@ -65,3 +65,9 @@ class PostOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class FeedPostOut(PostOut):
+    author_username: str | None = None
+    author_avatar_url: str | None = None
+    has_access: bool

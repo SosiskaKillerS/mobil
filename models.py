@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, DateTime, func, Boolean, Integer, String, Text
+from sqlalchemy import ForeignKey, DateTime, func, Boolean, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 from init_db import Base
@@ -53,3 +53,13 @@ class Post(Base):
     )
 
     author: Mapped["User"] = relationship(back_populates="posts")
+
+class PostPurchase(Base):
+    __tablename__ = "post_purchases"
+    __table_args__ = (UniqueConstraint("user_id", "post_id", name="uq_post_purchase_user_post"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
