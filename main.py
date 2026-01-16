@@ -392,6 +392,21 @@ async def create_post(
     await db.refresh(post)
     return post
 
+@app.get("/posts/me", response_model=list[PostOut])
+async def get_my_posts(
+    db: AsyncSession = Depends(get_session),
+    token: TokenPayload = Depends(security.token_required(locations=["headers", "cookies"])),
+):
+    try:
+        author_id = int(token.sub)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    result = await db.execute(
+        select(Post).where(Post.author_id == author_id).order_by(Post.created_at.desc())
+    )
+    return list(result.scalars().all())
+
 
 
 
