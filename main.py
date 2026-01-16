@@ -409,16 +409,34 @@ async def get_my_posts(
     )
     return list(result.scalars().all())
 
+CONTENT_TYPE_TO_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+}
+
+ALLOWED_PREFIXES = ("image/", "video/")
+ALLOWED_EXT = set(CONTENT_TYPE_TO_EXT.values())
+
 @app.post("/posts/upload")
-async def upload_post_media(
-    file: UploadFile = File(...),
-):
-    if not file.content_type:
-        raise HTTPException(status_code=400, detail="Missing content_type")
+async def upload_post_media(file: UploadFile = File(...)):
+    ct = (file.content_type or "").lower().strip()
+    if not ct or not ct.startswith(ALLOWED_PREFIXES):
+        raise HTTPException(status_code=400, detail="Only image/video allowed")
 
     ext = Path(file.filename or "").suffix.lower()
-    if ext not in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov"]:
-        raise HTTPException(status_code=400, detail="Unsupported file type")
+
+    if ext not in ALLOWED_EXT:
+        ext = CONTENT_TYPE_TO_EXT.get(ct, "")
+
+    if not ext:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ct}")
 
     filename = f"{uuid.uuid4().hex}{ext}"
     dest_path = POST_DIR / filename
@@ -429,5 +447,8 @@ async def upload_post_media(
 
     dest_path.write_bytes(content)
 
-    url = f"/media/posts/{filename}"
-    return {"media_url": url}
+    return {
+        "media_url": f"/media/posts/{filename}",
+        "media_type": "video" if ct.startswith("video/") else "image",
+    }
+
