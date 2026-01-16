@@ -421,7 +421,7 @@ async def upload_post_media(
         raise HTTPException(status_code=400, detail="Unsupported file type")
 
     filename = f"{uuid.uuid4().hex}{ext}"
-    dest_path = POSTS_DIR / filename
+    dest_path = POST_DIR / filename
 
     content = await file.read()
     if not content:
