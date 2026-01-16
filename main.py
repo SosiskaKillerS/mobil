@@ -355,17 +355,36 @@ async def create_post(
     try:
         author_id = int(token.sub)
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token subject")
+        raise HTTPException(status_code=401, detail="Invalid token")
 
     result = await db.execute(select(User).where(User.id == author_id))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
+    currency = (body.currency or "USD").upper().strip()
+    if len(currency) != 3:
+        raise HTTPException(status_code=400, detail="Invalid currency")
+
+    price_cents = body.price_cents
+    if not body.is_paid:
+        price_cents = None
+    else:
+        if price_cents is None or price_cents < 0:
+            raise HTTPException(status_code=400, detail="Invalid price_cents")
+
     post = Post(
         author_id=author_id,
         title=body.title,
+        caption=body.caption,
         media_url=body.media_url,
+        media_type=(body.media_type or "image").strip(),
+        preview_url=body.preview_url,
+        is_paid=body.is_paid,
+        price_cents=price_cents,
+        currency=currency,
+        is_public=body.is_public,
+        is_published=body.is_published,
     )
 
     db.add(post)
