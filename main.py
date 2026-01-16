@@ -52,7 +52,9 @@ REDIS_URL = os.getenv("REDIS_URL")
 
 MEDIA_DIR = Path("media")
 AVATARS_DIR = MEDIA_DIR / "avatars"
+POST_DIR = MEDIA_DIR / "posts"
 AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+POST_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 
@@ -407,6 +409,25 @@ async def get_my_posts(
     )
     return list(result.scalars().all())
 
+@app.post("/posts/upload")
+async def upload_post_media(
+    file: UploadFile = File(...),
+):
+    if not file.content_type:
+        raise HTTPException(status_code=400, detail="Missing content_type")
 
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov"]:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
 
+    filename = f"{uuid.uuid4().hex}{ext}"
+    dest_path = POSTS_DIR / filename
 
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    dest_path.write_bytes(content)
+
+    url = f"/media/posts/{filename}"
+    return {"media_url": url}
