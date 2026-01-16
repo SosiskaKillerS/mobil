@@ -452,3 +452,28 @@ async def upload_post_media(file: UploadFile = File(...)):
         "media_type": "video" if ct.startswith("video/") else "image",
     }
 
+@app.get("/posts/feed", response_model=list[PostOut])
+async def get_feed_posts(
+    limit: int = 30,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_session),
+    token: TokenPayload = Depends(security.token_required(locations=["headers", "cookies"])),
+):
+    try:
+        me = int(token.sub)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
+    result = await db.execute(
+        select(Post)
+        .where(Post.is_published == True)
+        .where(Post.is_public == True)
+        .where(Post.author_id != me)
+        .order_by(Post.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(result.scalars().all())
