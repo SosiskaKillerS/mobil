@@ -1,4 +1,5 @@
 from pydantic import BaseModel, EmailStr, model_validator, Field
+from datetime import datetime
 
 class UserLogin(BaseModel):
     password: str = Field(min_length=6, max_length=12)
